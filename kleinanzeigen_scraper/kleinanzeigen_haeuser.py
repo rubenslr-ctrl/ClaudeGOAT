@@ -27,7 +27,11 @@ import random
 import re
 import sys
 import time
+import warnings
 from pathlib import Path
+
+# Harmloser Hinweis von urllib3 bei älteren Python-Versionen auf macOS (LibreSSL)
+warnings.filterwarnings("ignore", message=".*OpenSSL.*")
 
 import requests
 from bs4 import BeautifulSoup
@@ -37,10 +41,11 @@ from openpyxl.utils import get_column_letter
 
 BASIS = "https://www.kleinanzeigen.de"
 
-# Kategorien: Häuser zum Kauf (c208), Häuser zur Miete (c205)
+# Kategorien: Häuser zum Kauf (c208), Häuser zur Miete (c205).
+# Die Kategorienummer steckt auch in jedem Inserat-Link (.../1234567890-208-1548).
 KATEGORIEN = {
-    "kauf": ("s-haus-kaufen", "c208"),
-    "miete": ("s-haus-mieten", "c205"),
+    "kauf": ("s-haus-kaufen", "c208", "208"),
+    "miete": ("s-haus-mieten", "c205", "205"),
 }
 
 # Kleinanzeigen zeigt pro Suche max. ~50 Seiten. Damit deutschlandweit genug
@@ -112,7 +117,8 @@ def lade(session, url):
                 continue
             raise Gesperrt(f"HTTP {r.status_code} bei {url}")
         r.raise_for_status()
-        if "captcha" in r.text.lower()[:20000] and "aditem" not in r.text:
+        if ("captcha" in r.text.lower() and "/s-anzeige/" not in r.text
+                and "viewad-title" not in r.text):
             raise Gesperrt("Captcha-Seite erhalten")
         return r.text
     raise Gesperrt(f"Seite nicht ladbar: {url}")
@@ -129,16 +135,17 @@ def such_url(slug, cat, seite, preis):
     return f"{BASIS}/" + "/".join(teile)
 
 
-def inserat_links(html):
-    soup = BeautifulSoup(html, "html.parser")
+# Inserat-Links, z.B. /s-anzeige/titel-des-inserats/3528736838-208-1548
+ANZEIGE_RE = re.compile(r"/s-anzeige/[^\"'\s?#<>]+/\d+-(\d+)-\d+")
+
+
+def inserat_links(html, katnr):
+    """Alle Inserat-Links der Suchseite aus der gewünschten Kategorie (ohne Duplikate)."""
     links = []
-    for art in soup.select("article.aditem"):
-        href = art.get("data-href")
-        if not href:
-            a = art.select_one("a[href*='/s-anzeige/']")
-            href = a.get("href") if a else None
-        if href:
-            links.append(BASIS + href if href.startswith("/") else href)
+    for m in ANZEIGE_RE.finditer(html):
+        url = BASIS + m.group(0)
+        if m.group(1) == katnr and url not in links:
+            links.append(url)
     return links
 
 
@@ -163,7 +170,11 @@ def parse_inserat(html, url):
     soup = BeautifulSoup(html, "html.parser")
 
     # Adresse
-    strasse_roh = text(soup.select_one("#street-address"))
+    strasse_roh = text(soup.select_one("#street-address")
+                       or soup.select_one("[itemprop='streetAddress']"))
+    if not strasse_roh:
+        m = re.search(r'"streetAddress"\s*:\s*"([^"]+)"', html)
+        strasse_roh = m.group(1) if m else ""
     strasse, nr = zerlege_strasse(strasse_roh) if strasse_roh else (None, None)
 
     ort_roh = text(soup.select_one("#viewad-locality"))  # z.B. "12345 Berlin - Mitte"
@@ -286,9 +297,10 @@ def main():
     session = requests.Session()
     try:
         for art in arten:
-            slug, cat = KATEGORIEN[art]
+            slug, cat, katnr = KATEGORIEN[art]
             baender = PREISBAENDER_KAUF if art == "kauf" else PREISBAENDER_MIETE
             for band in baender:
+                vorherige = None
                 for seite in range(1, MAX_SEITEN + 1):
                     if len(treffer) >= args.ziel:
                         raise ZielErreicht
@@ -296,10 +308,12 @@ def main():
                     print(f"[{art} {band}] Seite {seite}: {url}")
                     html = lade(session, url)
                     warte()
-                    links = inserat_links(html) if html else []
-                    neue = [l for l in links if l not in geprueft]
-                    if not links:
+                    links = inserat_links(html, katnr) if html else []
+                    if not links or links == vorherige:
                         break  # keine weiteren Seiten in diesem Band
+                    vorherige = links
+                    neue = [l for l in links if l not in geprueft]
+                    vorher = len(treffer)
                     for link in neue:
                         if len(treffer) >= args.ziel:
                             raise ZielErreicht
@@ -313,6 +327,8 @@ def main():
                             treffer.append(z)
                             print(f"   ✔ {len(treffer)}/{args.ziel}: {z['Straße']} {z['Hausnummer']}, "
                                   f"{z['PLZ']} {z['Stadt']} ({z['Gebäudetyp']}, {z['Baujahr']})")
+                    print(f"   {len(links)} Inserate auf der Seite, {len(neue)} neu geprüft, "
+                          f"{len(treffer) - vorher} vollständig (gesamt {len(treffer)}/{args.ziel})")
                     sichern()
     except ZielErreicht:
         pass
