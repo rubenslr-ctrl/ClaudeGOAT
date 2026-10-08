@@ -1,0 +1,35 @@
+{
+  // Kleinanzeigen-Scraper: Terminal > Task ausführen ... (oder Strg+Shift+P > "Tasks: Run Task")
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Scraper: Installieren",
+      "type": "shell",
+      "options": { "cwd": "${workspaceFolder}/kleinanzeigen_scraper" },
+      "windows": { "command": ".\\installieren.bat --still" },
+      "osx": { "command": "./installieren.sh" },
+      "linux": { "command": "./installieren.sh" },
+      "problemMatcher": []
+    },
+    {
+      "label": "Scraper: Test (10 Häuser)",
+      "type": "shell",
+      "dependsOn": "Scraper: Installieren",
+      "options": { "cwd": "${workspaceFolder}/kleinanzeigen_scraper" },
+      "windows": { "command": ".\\.venv\\Scripts\\python.exe kleinanzeigen_haeuser.py --test" },
+      "osx": { "command": ".venv/bin/python kleinanzeigen_haeuser.py --test" },
+      "linux": { "command": ".venv/bin/python kleinanzeigen_haeuser.py --test" },
+      "problemMatcher": []
+    },
+    {
+      "label": "Scraper: Starten (500 Häuser)",
+      "type": "shell",
+      "dependsOn": "Scraper: Installieren",
+      "options": { "cwd": "${workspaceFolder}/kleinanzeigen_scraper" },
+      "windows": { "command": ".\\.venv\\Scripts\\python.exe kleinanzeigen_haeuser.py" },
+      "osx": { "command": ".venv/bin/python kleinanzeigen_haeuser.py" },
+      "linux": { "command": ".venv/bin/python kleinanzeigen_haeuser.py" },
+      "problemMatcher": []
+    }
+  ]
+}

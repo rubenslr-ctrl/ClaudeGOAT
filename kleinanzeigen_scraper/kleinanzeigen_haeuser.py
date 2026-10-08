@@ -10,8 +10,9 @@ Anbieter) von kleinanzeigen.de und speichert NUR Inserate, die
 im Inserat selbst angeben. Es werden keine Daten ergänzt oder geschätzt:
 Jeder Wert stammt 1:1 aus dem Inserat, die Quelle (Link) steht in jeder Zeile.
 
-Benutzung:
-    pip install requests beautifulsoup4 openpyxl
+Benutzung (Details siehe README.md):
+    pip install -r requirements.txt
+    python kleinanzeigen_haeuser.py --test       # Probelauf: 10 Treffer
     python kleinanzeigen_haeuser.py              # Standard: 500 Treffer
     python kleinanzeigen_haeuser.py --ziel 100   # weniger Treffer
     python kleinanzeigen_haeuser.py --nur-kauf   # nur Häuser zum Kauf
@@ -77,7 +78,15 @@ SONSTIGES_FELDER = [
 ]
 
 
+# Alle Dateien (Excel, Fortschritt) landen im Ordner dieses Skripts
+ORDNER = Path(__file__).resolve().parent
+
+
 class Gesperrt(Exception):
+    pass
+
+
+class ZielErreicht(Exception):
     pass
 
 
@@ -235,9 +244,21 @@ def main():
     ap.add_argument("--nur-kauf", action="store_true", help="nur Häuser zum Kauf")
     ap.add_argument("--nur-miete", action="store_true", help="nur Häuser zur Miete")
     ap.add_argument("--datei", default="haeuser_kleinanzeigen.xlsx", help="Excel-Ausgabedatei")
+    ap.add_argument("--test", action="store_true",
+                    help="Probelauf mit 10 Treffern in eigene Dateien (test_*.xlsx / fortschritt_test.json)")
     args = ap.parse_args()
+    if args.test:
+        args.ziel = min(args.ziel, 10)
+        args.datei = "test_" + args.datei
 
-    fortschritt_pfad = Path("fortschritt.json")
+    # Windows-Konsolen können sonst an Sonderzeichen wie ✔ scheitern
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
+    except (AttributeError, ValueError):
+        pass
+
+    excel_pfad = ORDNER / args.datei
+    fortschritt_pfad = ORDNER / ("fortschritt_test.json" if args.test else "fortschritt.json")
     stand = {"geprueft": [], "treffer": []}
     if fortschritt_pfad.exists():
         stand = json.loads(fortschritt_pfad.read_text(encoding="utf-8"))
@@ -250,7 +271,11 @@ def main():
         stand["geprueft"] = sorted(geprueft)
         stand["treffer"] = treffer
         fortschritt_pfad.write_text(json.dumps(stand, ensure_ascii=False), encoding="utf-8")
-        speichere_excel(treffer, args.datei)
+        try:
+            speichere_excel(treffer, excel_pfad)
+        except PermissionError:
+            print(f"  Hinweis: {excel_pfad.name} ist gerade geöffnet und kann nicht gespeichert "
+                  "werden – bitte Excel schließen. Der Fortschritt ist trotzdem gesichert.")
 
     arten = ["kauf", "miete"]
     if args.nur_kauf:
@@ -266,7 +291,7 @@ def main():
             for band in baender:
                 for seite in range(1, MAX_SEITEN + 1):
                     if len(treffer) >= args.ziel:
-                        raise StopIteration
+                        raise ZielErreicht
                     url = such_url(slug, cat, seite, band)
                     print(f"[{art} {band}] Seite {seite}: {url}")
                     html = lade(session, url)
@@ -277,7 +302,7 @@ def main():
                         break  # keine weiteren Seiten in diesem Band
                     for link in neue:
                         if len(treffer) >= args.ziel:
-                            raise StopIteration
+                            raise ZielErreicht
                         detail = lade(session, link)
                         warte()
                         geprueft.add(link)
@@ -289,16 +314,16 @@ def main():
                             print(f"   ✔ {len(treffer)}/{args.ziel}: {z['Straße']} {z['Hausnummer']}, "
                                   f"{z['PLZ']} {z['Stadt']} ({z['Gebäudetyp']}, {z['Baujahr']})")
                     sichern()
-    except StopIteration:
+    except ZielErreicht:
         pass
     except Gesperrt as e:
-        print(f"\nKleinanzeigen blockiert gerade die Anfragen ({e}).")
+        print(f"\nKleinanzeigen ist nicht erreichbar oder blockiert gerade die Anfragen ({e}).")
         print("Bitte später (z.B. in ein paar Stunden) erneut starten – der Fortschritt ist gespeichert.")
     except KeyboardInterrupt:
         print("\nAbgebrochen – Fortschritt wird gespeichert.")
     finally:
         sichern()
-        print(f"\n{len(treffer)} vollständige Häuser gespeichert in: {args.datei}")
+        print(f"\n{len(treffer)} vollständige Häuser gespeichert in: {excel_pfad}")
 
 
 if __name__ == "__main__":
